@@ -1,0 +1,17 @@
+# training corpora ignored; eval_cases committed so the real-file bench is self-contained
+/Data/*
+!/Data/eval_cases/
+runs/
+wandb/
+.venv/
+# wandb secret 
+WAND_API_KEY
+*_API_KEY
+__pycache__/
+.claude/scheduled_tasks.lock
+*.ckpt
+# release staging (bulky artifacts uploaded to GitHub Releases, not committed)
+dist/
+# committed runtime bundle is an explicit exception to the *.ckpt / runs rules
+!weights/
+!weights/**
