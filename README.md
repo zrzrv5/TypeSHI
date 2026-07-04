@@ -151,4 +151,10 @@ CIF dummy species) so you don't have to rediscover them.
 
 ## License
 
-TBD before public release.
+Code: **Apache-2.0** (see [`LICENSE`](LICENSE)) — permissive, with a patent grant.
+
+The trained **weights** (in `weights/` and the Release) are *derived* from third-party
+datasets — Materials Project/MPTrj (CC-BY-4.0), COSMOS, the Crystallography Open Database,
+and OpenLAM/DPA-2 domains — each under its own terms. The code license doesn't override those;
+if you use the weights, honor the upstream dataset licenses (attribution where required). See
+[`NOTICE`](NOTICE) and `docs/REPRODUCE.md`.

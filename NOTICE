@@ -1,0 +1,21 @@
+TypeSHI — type-id -> element inference for MD files
+Copyright 2026 zrzrv5
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+Data & trained weights
+--------------------------------------------------------------------------------
+The code in this repository is licensed under Apache-2.0. The trained model
+weights (committed in weights/ and distributed via GitHub Releases) are DERIVED
+from third-party datasets, each under its own license. Users of the weights are
+responsible for honoring those upstream terms, including attribution where
+required:
+
+  - Materials Project / MPTrj    CC-BY-4.0        (attribution required)
+  - COSMOS DBS                   per source terms
+  - Crystallography Open DB      public-domain-dedicated data
+  - OpenLAM / DPA-2 domains      per AIS-Square dataset terms
+
+See docs/REPRODUCE.md for exact dataset sources. Nothing in the code license
+overrides the dataset licenses that apply to the weights.
