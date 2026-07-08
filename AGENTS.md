@@ -1,24 +1,32 @@
 # AGENTS.md — orientation for coding agents
 
-TypeSHI predicts top-K element candidates per atom **type id** from geometry only
-(`positions`, `type_ids`, optional `cell`). Two-stage design: per-type-pair descriptors
-(partial RDFs + robust scalars + sampled neighbor environments) → small set-transformer
-(1.85M params, 94-way per type). Read `docs/MODEL.md` for the why of every piece before
-changing the model or the features.
+TypeSHI recovers likely element hypotheses per anonymous atom **type id** from geometry only
+(`positions`, `type_ids`, optional `cell`). It is a playful research notebook with a real
+runtime path, so keep the tone light but the claims precise: ranked hypotheses and conformal
+sets, not verdicts. Two-stage design: per-type-pair descriptors (partial RDFs + robust
+scalars + sampled neighbor environments) → small set-transformer (1.85M params, 94-way per
+type). Read `docs/MODEL.md` for the why of every piece before changing the model or the
+features.
 
 ## Commands
 
-Everything runs from the repo root as `uv run python ...` (Python 3.12, uv-managed).
+Everything in the full research/training environment runs from the repo root as
+`uv run python ...` (Python 3.12, uv-managed).
 
 ```bash
 uv run python scripts/predict.py <file> --conformal      # torch ensemble inference
-uv run python scripts/predict_lite.py <file>             # ONNX, no torch
+uv run python scripts/predict_lite.py <file>             # ONNX path; script imports no torch
 uv run python scripts/evaluate_bench.py runs/production/*.ckpt --decode   # real-file bench
 uv run python scripts/train.py --data Data/processed/<shards...> --name X --epochs 30 --use-env
 uv run python scripts/export_model.py                    # ONNX + CoreML (CPU only)
 ```
 
 Full pipeline (data → shards → training → calibration → export): `docs/REPRODUCE.md`.
+
+Packaging caveat: `predict_lite.py` is no-torch at runtime, but the default `uv` environment
+still includes the CUDA-pinned torch stack. On macOS/Apple Silicon, `uv run` may fail before
+the lite script starts; use a small no-torch venv (`numpy scipy ase matscipy onnxruntime`) for
+lite inference unless/until the project gets a separate runtime dependency group.
 
 ## Hard rules
 
@@ -28,7 +36,8 @@ Full pipeline (data → shards → training → calibration → export): `docs/R
 - **Never scale-normalize or scale-augment geometry.** Absolute ångström distances are the
   physical signal; unit inference (`src/typeid2elem/units.py`) depends on this.
 - **torch stays pinned to cu128 wheels** in `pyproject.toml` (driver supports CUDA ≤ 12.9;
-  default wheels break). Do not "upgrade" this.
+  default wheels break). Do not "upgrade" this. If improving packaging, split runtime vs
+  training dependencies without changing the CUDA training pin.
 - **Neighbor lists via matscipy only** — ASE's is ~80× slower and once turned preprocessing
   into a multi-day stall.
 - wandb key lives in a repo-root file named `WANDB_API_KEY` 

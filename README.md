@@ -1,9 +1,10 @@
-# TypeSHI : guess the chemical elements from geometry alone
+# TypeSHI: likely element hypotheses for anonymous atom types
 
-TypeSHI (**T**ype-id → **S**pecies **H**ypothesis **I**nference) is a for-fun experiment I asked Fable to conduct that may end up used in my other [project](https://github.com/zrzrv5/NAIIVE).
-It turns a structure into per-type-pair descriptors (partial RDFs + robust bond/coordination
+TypeSHI (**T**ype-id → **S**pecies **H**ypothesis **I**nference) is a for-fun experiment I asked Fable to conduct that may end up included in my other [project](https://github.com/zrzrv5/NAIIVE).
+It recovers likely element hypotheses for anonymous atom **type ids** from geometry alone,
+then turns a structure into per-type-pair descriptors (partial RDFs + robust bond/coordination
 statistics + sampled neighbor environments) and feeds them to a tiny set-transformer (1.85M
-params) that scores 94 elements per type id. 
+params) that scores 94 elements per type id.
 
 If you landed here looking for something else:
 
@@ -14,7 +15,7 @@ If you landed here looking for something else:
 TypeSHI's input is a bare simulation snapshot whose per-atom *identities themselves* are the
 unknowns.
 
-> **TLDR** — current best: a single small model trained on ~1.5M records (MLFF dataset + crystals from COD, with augmentation), plus a composition prior and conformal top-K sets at inference. 
+> **TLDR** — current best: a single small model trained on ~1.5M records (MLFF dataset + crystals from COD, with augmentation), plus a composition prior and conformal top-K sets at inference.
 > On 131 real type-ids from files lying around my machines: 60% top-1, 82% top-3, 93% top-5 — from a 1.9 MB int8 model in <1 s on CPU.
 
 > **Problem & Motivation**: files from my work often carry no element names — sometimes the format can't store them, sometimes (mostly) past-me was lazy — and every visualization session starts with re-assigning types by hand.
@@ -32,20 +33,20 @@ unknowns.
 - `scripts/` — `preprocess_*` (one per data source), `train`, `evaluate_*`, `predict`,
   `predict_lite` (no-torch ONNX path), `calibrate`, `export_model`, `mine_costats`
 - `weights/` — committed 2 MB runtime bundle: the single int8 deploy model +
-  decode/conformal stats, so a fresh clone runs `predict_lite.py` with no download
-- `metal/` — (future) Metal + Swift code for on-device inference (`InaccurateRDFCalculator`
-  descriptor kernel → CoreML)
+  decode/conformal stats, so a fresh clone has the assets `predict_lite.py` needs
+- `metal/` — Metal + Swift on-device inference (`InaccurateRDFCalculator` descriptor
+  kernels → CoreML/Core AI backend), verified against the Python reference
 - `docs/`
   - `REPORT.md` — the human-readable project report: method, what we tried, results, take-homes
   - `MODEL.md` — what the model is and *why* every piece is the way it is
   - `REPRODUCE.md` — data acquisition → preprocessing → training → evaluation, step by step
-  - `EXPERIMENTS.md` — append-only lab log E0–E17: everything tried, kept, and rejected
+  - `EXPERIMENTS.md` — append-only lab log E0–E20: everything tried, kept, and rejected
   - `EXPORT.md` — ONNX/CoreML export details; `PLAN.md` — decision log; `DATA.md` — dataset notes
 
 Training data (~120 GB raw) is **not** in the repo; `docs/REPRODUCE.md` has download commands
-for every source. The 2 MB int8 deploy model ships in `weights/` (so the lite path runs on a
-bare clone); the full set — torch checkpoints, per-member ONNX, and the CoreML packages for the
-Metal export — is a GitHub Release tarball built by `scripts/package_release.py`.
+for every source. The 2 MB int8 deploy model ships in `weights/` (so the lite path needs no
+model download); the full set — torch checkpoints, per-member ONNX, and the CoreML packages
+for the Metal export — is a GitHub Release tarball built by `scripts/package_release.py`.
 
 ## Inference
 
@@ -83,12 +84,19 @@ ASE reads works too via `--format ase`):
 
 ```bash
 uv run python scripts/predict.py <file> [--conformal] [--units bohr] [--top-k 5]
-# minimal footprint (no torch; 1.9 MB int8 model from weights/, ~170 MB RAM, <1 s):
+# minimal runtime path: ONNX, no torch imports, 1.9 MB int8 model from weights/
 uv run python scripts/predict_lite.py <file> [--conformal]
 ```
 
-`predict_lite.py` runs on a bare clone (model in `weights/`). `predict.py` runs the 6-model
-torch ensemble and needs the checkpoints from the Release tarball unpacked into `runs/`.
+`predict_lite.py` is the small-footprint path (ONNX Runtime, no torch imports, model in
+`weights/`). One current packaging wart: the default `uv` environment is still the full
+research/training environment, and `pyproject.toml` pins CUDA Torch wheels for the training
+machine. On Linux with that CUDA stack, `uv run` is fine. On macOS/Apple Silicon, use a small
+no-torch venv with `numpy scipy ase matscipy onnxruntime` for `predict_lite.py` until the
+runtime dependencies are split cleanly.
+
+`predict.py` runs the 6-model torch ensemble and needs the checkpoints from the Release
+tarball unpacked into `runs/`.
 
 ```
 $ uv run python scripts/predict.py 400K.run.data --conformal
@@ -124,13 +132,14 @@ Ask your favorite coding agent to read the `AGENTS.md` file.
 ### Install and setup
 
 ```bash
-uv sync        # Python 3.12, full environment (training + inference)
+uv sync        # Python 3.12, full research/training environment
 ```
 
 Two environment gotchas are pinned in `pyproject.toml` on purpose: torch uses **cu128 wheels**
 (default cu13 wheels break on driver ≤ CUDA 12.9), and neighbor lists use **matscipy** (ASE's
 is ~80× slower). Optional wandb logging reads a repo-root key file — see `docs/REPRODUCE.md` §0.
-Inference is CPU-only; training wants a GPU (everything here was trained on one RTX 4090).
+The lite inference script itself is CPU-only and no-torch; the full `uv` environment is not.
+Training wants a GPU (everything here was trained on one RTX 4090).
 
 ### Download data
 
@@ -142,9 +151,9 @@ CIF dummy species) so you don't have to rediscover them.
 
 ## Roadmap
 
-- **On-device (Apple/Metal)**: descriptor computation as a Metal kernel
-  (`InaccurateRDFCalculator`: subsampled/approximate partial-RDF transform; the interior-crop
-  trick maps directly to GPU) feeding the CoreML model (`runs/export/*.mlpackage`, 3.8 MB fp16).
+- **On-device (Apple/Metal)**: descriptor computation + env sampling + decode/conformal are
+  implemented and parity-checked; the remaining chore is a uniform-grid neighbor search so
+  huge files do not take the scenic `O(N²)` route.
 - Learned gating over ensemble members (confidence-weighted fusion is a partial fix for
   specialist dilution).
 - More DPA-2/AIS-Square domains (ZrO₂, W, metallic glasses, electrolytes).

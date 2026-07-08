@@ -1,7 +1,7 @@
-# weights/ — committed runtime bundle
+# weights/ — committed lite-runtime bundle
 
-Everything the **no-torch inference path** needs, so a fresh clone runs with no
-extra download (~2 MB total):
+Everything the **no-torch inference path** needs at runtime, with no model download
+(~2 MB total):
 
 | file | what | used by |
 |---|---|---|
@@ -12,6 +12,12 @@ extra download (~2 MB total):
 ```bash
 uv run python scripts/predict_lite.py <file>          # uses weights/ automatically
 ```
+
+Small packaging caveat: `predict_lite.py` does not import torch, but the repo's default
+`uv` environment is still the full training environment and pins CUDA Torch wheels. On a
+Linux CUDA machine, `uv run` works. On macOS/Apple Silicon, run the lite script from a
+small venv with `numpy scipy ase matscipy onnxruntime` until the project gets a separate
+runtime dependency group.
 
 ## Full artifacts (torch checkpoints, fp32 ONNX, all CoreML packages)
 

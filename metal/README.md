@@ -1,4 +1,4 @@
-# metal/ — on-device (Metal + CoreML) inference
+# metal/ — on-device hypotheses (Metal + CoreML/Core AI)
 
 **Status: complete — descriptor + decode path verified on-device.** The GPU kernels
 (`rdfHistogram` with full periodic-image enumeration + atomic-min nearest distance, and
@@ -11,11 +11,13 @@ The only item left is a perf optimization (uniform-grid neighbor search) — the
 
 ## The idea
 
-The Python pipeline is `parse → descriptors → set-transformer → decode`. Only the
-descriptor stage is expensive at scale, and it's plain histogram math — a perfect fit for
-a GPU kernel. `InaccurateRDFCalculator` computes the per-type-pair descriptors on Metal
-and hands them to the CoreML-exported network (`env_codfull_sharp30.mlpackage`, 3.6 MB
-fp16; committed int8 ONNX is for the desktop lite path).
+The Python pipeline is `parse → descriptors → set-transformer → decode`: recover likely
+element hypotheses for anonymous type ids, not final answers from the chemistry oracle.
+Only the descriptor stage is expensive at scale, and it's plain histogram math — a
+perfect fit for a GPU kernel. `InaccurateRDFCalculator` computes the per-type-pair
+descriptors on Metal and hands them to the CoreML-exported network
+(`env_codfull_sharp30.mlpackage`, 3.6 MB fp16; committed int8 ONNX is for the desktop
+lite path).
 
 "Inaccurate" is a deliberate design license: chemistry is decided by bond-length **peaks**
 and **coordination**, both robust to subsampling RDF centers or using a coarse neighbor

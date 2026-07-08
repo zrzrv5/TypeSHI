@@ -1,7 +1,7 @@
-# metal/parity/ — golden reference for the Metal port
+# metal/parity/ — golden reference for the Metal notebook contraption
 
 `golden.json` is the source of truth the Swift `parity-check` diffs against. It is produced
-by the **Python** pipeline, so it's authoritative and platform-independent.
+by the **Python** pipeline, so it is authoritative and platform-independent.
 
 - `gen_reference.py` — builds a small, fully-specified rocksalt structure (64 atoms, both
   types), computes reference descriptors with `typeid2elem.descriptors.compute_features`,
@@ -17,7 +17,7 @@ by the **Python** pipeline, so it's authoritative and platform-independent.
   and writes `decode_golden.json`. `parity-check` reproduces it from the same `log_probs` —
   an on-device unit test for `Decode.swift` that needs no CoreML model.
 
-## Verification scripts (no-torch venv: `numpy scipy ase onnxruntime matscipy`)
+## Verification scripts (lite venv: `numpy scipy ase onnxruntime matscipy`)
 
 The full training env can't install on macOS (torch is cu128-pinned), so these validate the
 model/eval legs through the committed **int8 ONNX** deploy model instead of CoreML:
