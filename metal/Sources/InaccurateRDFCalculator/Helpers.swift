@@ -23,12 +23,13 @@ func normalizeRDF(_ raw: [UInt32], centers: Double, rhoB: Double) -> [Float] {
     let nb = Desc.nBins
     let smeared = gaussianSmooth(raw.map { Double($0) }, sigma: Double(Desc.smearBins))
     var g = [Float](repeating: 0, count: nb)
-    let denomCommon = max(centers, 1) * max(rhoB, 1e-12)
+    // Match descriptors.py: denom = counts_centers * rho_b * shell_vol, floored
+    // at 1e-12 only on the final product (do NOT pre-clamp the factors).
     for k in 0..<nb {
         let rLo = Double(k) * Double(Desc.dr)
         let rHi = Double(k + 1) * Double(Desc.dr)
         let shell = 4.0 / 3.0 * .pi * (rHi * rHi * rHi - rLo * rLo * rLo)
-        let denom = denomCommon * shell
+        let denom = centers * rhoB * shell
         g[k] = Float(min(smeared[k] / max(denom, 1e-12), 1e4))
     }
     return g

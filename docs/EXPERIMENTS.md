@@ -412,3 +412,100 @@ core-shell polarizable model scoring 4/6 despite duplicate near-zero-separation 
 - **Deployment cost even if it had helped:** iterative decode = T sequential forward passes, breaking
   the single-pass ONNX/CoreML export (E17). Kept `model_diffusion.py` + `exp_diffusion.py` as the
   record; the `TypeSetClassifier.encode` refactor is retained (harmless, reused nowhere else yet).
+
+## 2026-07-04 — E19: Metal/CoreML on-device port finished + verified
+
+- **What:** completed the `metal/` Swift package (`InaccurateRDFCalculator`) so the
+  descriptor→model→decode path runs on-device for the iOS/macOS app. Finished the stubbed
+  pieces and closed a latent crash. Env is a M1 Max (Metal 4); `uv run` can't build here
+  (torch is cu128-pinned, no macOS wheel), so model/eval legs are verified through the
+  committed **int8 ONNX** with a no-torch venv (`numpy scipy ase onnxruntime matscipy`).
+- **Implemented / fixed:**
+  - `rdfHistogram` did single **minimum-image** — wrong whenever `R_MAX` > half-cell
+    (the golden cell is 8.4 Å with R_MAX 8.0). Replaced with **periodic-image enumeration**
+    (`s·a0+s·a1+s·a2`, replica counts from perpendicular heights), which also makes it exact
+    for triclinic cells and reproduces matscipy's multi-image neighbor list.
+  - `nnDist` racy compare-store → real **`atomic_fetch_min`** on the float bit-pattern.
+  - **`envSample`** kernel (per-type M sampled atoms × K nearest within R_ENV, sorted, as
+    (distance, partner type), −1 pad) + host bucketing (seeded splitmix64) + **4-draw
+    log-prob pooling** in `TypeSHI.predict`.
+  - Ported **composition decode** (`CompositionPrior`: PMI + charge-neutrality beam) and
+    **RAPS conformal** to Swift (`Decode.swift`/`Oxidation.swift`); PMI + calibration baked
+    into `decode_assets.json` by `metal/tools/gen_decode_assets.py`.
+  - Bug: `has_cell` was emitted as 0 for cell-less inputs, but `compute_features` sets it to
+    **1.0 in every branch** (the model never saw 0) — fixed to always 1.0.
+  - Latent crash: SwiftPM *copies* `Shaders.metal` as a resource but builds no
+    `default.metallib`, so `makeDefaultLibrary` threw "no default library". Switched to
+    runtime `makeLibrary(source:)` (portable across macOS/iOS).
+- **Verification (all green):**
+  | check | result |
+  |---|---|
+  | descriptors vs `golden.json` | rdf Δ 4.8e-6, pair_extra Δ 5.0e-6, frac/glob 0 |
+  | env sets vs `env_seed0` | env_d Δ 2.4e-6, env_t 0/512 mismatches |
+  | Swift decode+conformal vs `decode_golden.json` | marginals Δ 4.9e-9, conformal sets match |
+  | Metal desc → deploy ONNX → top-1 | `[Mg,Mg]` = golden; log_probs Δ 6.7e-6 |
+  | Metal path on 18 committed eval files | Metal-vs-Python top-1 **98.7%** (78/79); vs truth 49 vs 48 (env-RNG noise) |
+  | open-box molecule + triclinic tilt | rdf Δ 0 (paths the eval files don't cover) |
+  | lite (ONNX+decode) on the 18 files | **47/65/73 of 79** (top-1/3/5) |
+- **Bench context:** the 18 committed files are the MLFF-50 + MDRun-29 type-ids. Production
+  6-model ensemble on that subset (EVAL_CASES.md) = 47/65/75; the single deploy model the
+  Metal port feeds matches at top-1/top-3 (47/65) and is −2 at top-5 — as expected for
+  single vs ensemble, confirming the on-device path is at the documented accuracy.
+- **Left:** only the uniform-grid neighbor search (perf on huge files); the CoreML
+  `.mlpackage` top-1 leg (`parity-check --model`) is unrun here because that artifact needs
+  a torch export + an Apple device — verified by contract + the ONNX bridge instead.
+
+## 2026-07-04 — E20: Apple Core AI (.aimodel) export path — verified viable
+
+- **What:** Apple shipped **Core AI** (2026; Xcode 27 / macOS·iOS 27+) as the successor to
+  Core ML for on-device inference (`.aimodel` assets; converter = `coreai-torch`). Evaluated
+  it as the on-device backend for the iOS/macOS app in place of / alongside CoreML.
+- **Can we derive `.aimodel` from the ckpt (not ONNX)?** Yes — and it's the better path.
+  `coreai-torch` converts a torch `ExportedProgram`, so it reuses `export_model.py`'s existing
+  `ExportModel` wrapper (fixed B=1, T=8) exactly like the CoreML path, straight from fp32
+  checkpoint weights — no int8 quantization (unlike the committed deploy ONNX). You cannot
+  faithfully go ONNX→Core AI anyway; torch→Core AI is the supported front door.
+- **Added:** `scripts/export_model.py --coreai` → `export_coreai()`:
+  `torch.export.export(wrapper, dummy)` → `run_decompositions(get_decomp_table())` →
+  `TorchConverter().add_exported_program(ep, input_names=[...], output_names=["log_probs"]).to_coreai()`
+  → `AIProgram.save_asset(path.with_suffix(".aimodel"))`.
+- **Verified on THIS machine (M1 Max, macOS 26, Xcode 26.4 — no Xcode 27 yet):**
+  `coreai-torch==0.4.1` / `coreai-core==1.0.0b2` pip-install and run on macOS 26 (pull a normal
+  CPU/MPS torch 2.11, sidestepping the project's cu128 pin). The **real TypeSHI architecture**
+  (random-init, both `use_env` on/off — manual masked attention + env RBF/DeepSets encoder +
+  log_softmax) converts cleanly to a valid `.aimodel` (fp32, ~3.9–4.2 MB), export-vs-torch
+  Δ = 0. Conversion works on 26; the asset targets OS 27 (`save_asset` `minimum_os=v27`) and the
+  runtime `AIModel.load` is async, so **executing** the asset needs an OS-27 device.
+- **Not done here:** converting the *trained* ckpt (a Release artifact, absent locally) and the
+  Swift `CoreAIRunner` + on-device run (need Xcode 27 SDK). Metal front end / decode / conformal
+  are backend-agnostic and unchanged; only the model runner swaps. See metal/README "Core AI".
+
+### E20 update (weights tarball received) — real-model, both backends verified
+
+Release `typeshi-weights-v0.1` (6 ckpts + 7 .mlpackage + 7 onnx) unpacked, so the two
+previously-unrun legs are now closed **on the real deploy model** `env_codfull_sharp30`:
+- **CoreML (Swift `CoreMLRunner`):** `parity-check --model env_codfull_sharp30.mlpackage` →
+  top-1 `[Mg, Mg]` = golden. All 4 parity checks green with the production CoreML model
+  (CoreML runs natively on macOS 26; no Xcode 27 needed).
+- **Core AI `.aimodel` from the TRAINED ckpt:** `export_coreai` on `env_codfull_sharp30.ckpt`
+  → 7.46 MB fp32 `.aimodel`, export-vs-torch Δ 0. The `coreai` **Python runtime executes it on
+  macOS 26** (async `AIModel.load`; asset declares `minimum_os=v27` but ran on 26): top-1
+  `[Mg, Mg]`, and `.aimodel` vs raw torch fp32 log_probs **max|Δ| = 9.5e-6**. The int8 golden
+  differs by ~0.48 (quantization) but argmax is identical — the fp32 `.aimodel` is the
+  higher-fidelity asset. On-device (Swift `CoreAI.framework`) still needs Xcode 27 / OS 27.
+
+### E20 update — 3-backend eval on Data/eval_cases (18 files, 79 type-ids)
+
+`metal/parity/eval_backends_local.py` runs the identical predict_lite pipeline (4 env
+draws + composition decode) swapping only the model. All three are the same trained deploy
+model `env_codfull_sharp30` at different precisions:
+
+| backend | precision | top-1 | top-3 | top-5 |
+|---|---|---|---|---|
+| ONNX (committed) | int8 | 47/79 | 65/79 | 73/79 |
+| CoreML `.mlpackage` | fp16 | 48/79 | 65/79 | 72/79 |
+| Core AI `.aimodel` | fp32 | 48/79 | 65/79 | 72/79 |
+
+CoreML fp16 == Core AI fp32 exactly (48/65/72); int8 differs by one borderline type-id
+either direction (radius-twin near-tie). All ≈ the 6-model production ensemble (47/65/75) —
+both on-device backends deliver the documented accuracy on real files.

@@ -8,6 +8,12 @@ Usage:
     uv run python scripts/export_model.py                       # all runs/production/*.ckpt
     uv run python scripts/export_model.py --ckpt runs/production/sharp30.ckpt
     uv run python scripts/export_model.py --out-dir runs/export --n-parity 20
+    uv run python scripts/export_model.py --ckpt ... --coreai    # + Apple Core AI .aimodel
+
+--coreai adds an Apple Core AI (.aimodel) export via coreai-torch (2026 framework,
+Xcode/OS 27+ to run; conversion works on macOS 26+). It goes straight from the fp32
+checkpoint graph, so it avoids the int8 quantization of the committed deploy ONNX --
+prefer ckpt -> .aimodel over onnx -> anything. Install: `pip install coreai-torch`.
 
 CPU only (do not run on GPU -- it may be busy training).
 """
@@ -311,11 +317,49 @@ def export_coreml(wrapper: ExportModel, dummy, base_path: Path) -> dict:
     return result
 
 
+def export_coreai(wrapper: ExportModel, dummy, base_path: Path) -> dict:
+    """Export to Apple Core AI (`.aimodel`) via coreai-torch (2026 framework).
+
+    Core AI is Apple's successor to Core ML for on-device inference (Xcode 27 /
+    macOS|iOS 27+). This derives the on-device model straight from the fp32
+    checkpoint graph -- NO int8 quantization, unlike the committed deploy ONNX --
+    which is the whole reason to prefer ckpt -> .aimodel over onnx -> anything.
+
+    Requires `coreai-torch` (pip; pulls a CPU/MPS torch). The conversion itself
+    runs on macOS 26+, but the produced asset targets OS 27 (save_asset's
+    minimum_os default) and needs an OS-27 device / the Core AI runtime to execute.
+    Verified API surface: coreai-torch 0.4.1 / coreai-core 1.0.0b2.
+    """
+    import coreai_torch as ct  # optional heavy dep; imported only under --coreai
+
+    names = _names(dummy)
+    # torch.export (not jit.trace) is Core AI's front door; decompose to the ops
+    # the converter lowers, then hand the ExportedProgram to TorchConverter.
+    ep = torch.export.export(wrapper, tuple(dummy))
+    ep = ep.run_decompositions(ct.get_decomp_table())
+
+    # conversion-fidelity self-check: exported graph vs the eager wrapper
+    with torch.no_grad():
+        ep_out = ep.module()(*dummy)
+        ref_out = wrapper(*dummy)
+    export_diff = (ep_out - ref_out).abs().max().item()
+
+    prog = (
+        ct.TorchConverter()
+        .add_exported_program(ep, input_names=list(names), output_names=["log_probs"])
+        .to_coreai()
+    )
+    path = base_path.with_suffix(".aimodel")
+    prog.save_asset(path)          # writes an .aimodel bundle (minimum_os=v27)
+    return {"aimodel_path": path, "export_vs_torch_diff": export_diff}
+
+
 def _dir_size(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
 
-def export_one(ckpt: Path, out_dir: Path, n_parity: int, seed: int) -> dict:
+def export_one(ckpt: Path, out_dir: Path, n_parity: int, seed: int,
+               coreai: bool = False) -> dict:
     name = ckpt.stem
     print(f"\n=== {name} ===")
     lit = TypeSetClassifier.load_from_checkpoint(str(ckpt), map_location="cpu")
@@ -353,12 +397,21 @@ def export_one(ckpt: Path, out_dir: Path, n_parity: int, seed: int) -> dict:
     fp16_size = _dir_size(coreml_res["fp16_path"])
     fp32_size = _dir_size(coreml_res["fp32_path"]) if coreml_res["fp32_saved"] else None
 
+    coreai_path = coreai_size = None
+    if coreai:
+        coreai_res = export_coreai(wrapper, dummy, out_dir / name)
+        coreai_path = coreai_res["aimodel_path"]
+        coreai_size = _dir_size(coreai_path)
+        print(f"  Core AI (.aimodel) export-vs-torch diff = "
+              f"{coreai_res['export_vs_torch_diff']:.2e}  ({coreai_size/1e6:.2f}MB)")
+
     return dict(
         name=name, n_params=n_params, selfcheck_diff=selfcheck_diff,
         onnx_path=onnx_path, onnx_diff=onnx_diff, onnx_size=onnx_size,
         coreml_fp16_path=coreml_res["fp16_path"], coreml_fp16_size=fp16_size,
         coreml_fp32_path=coreml_res.get("fp32_path"), coreml_fp32_size=fp32_size,
         coreml_fp16_warned=coreml_res["fp16_warned"],
+        coreai_path=coreai_path, coreai_size=coreai_size,
         two_pass=lit.hparams.two_pass, use_env=lit.hparams.get("use_env", False),
     )
 
@@ -370,6 +423,8 @@ def main():
     ap.add_argument("--out-dir", default="runs/export")
     ap.add_argument("--n-parity", type=int, default=20)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--coreai", action="store_true",
+                    help="also export Apple Core AI .aimodel (needs `pip install coreai-torch`)")
     args = ap.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -382,15 +437,16 @@ def main():
 
     results = []
     for ckpt in ckpts:
-        results.append(export_one(ckpt, out_dir, args.n_parity, args.seed))
+        results.append(export_one(ckpt, out_dir, args.n_parity, args.seed, args.coreai))
 
     print("\n=== summary ===")
     for r in results:
         fp32_mb = "n/a" if r["coreml_fp32_size"] is None else f"{r['coreml_fp32_size']/1e6:.2f}MB"
+        coreai_mb = "" if r.get("coreai_size") is None else f" coreai={r['coreai_size']/1e6:.2f}MB"
         print(f"{r['name']}: params={r['n_params']:,} "
               f"onnx_diff={r['onnx_diff']:.2e} onnx={r['onnx_size']/1e6:.2f}MB "
               f"coreml_fp16={r['coreml_fp16_size']/1e6:.2f}MB "
-              f"coreml_fp32={fp32_mb}")
+              f"coreml_fp32={fp32_mb}{coreai_mb}")
 
 
 if __name__ == "__main__":

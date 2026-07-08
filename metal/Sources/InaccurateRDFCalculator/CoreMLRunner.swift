@@ -19,6 +19,9 @@ public final class CoreMLRunner {
         self.hasEnv = model.modelDescription.inputDescriptionsByName["env_d"] != nil
     }
 
+    /// Whether the loaded model consumes env sets (gates env-draw pooling upstream).
+    public var usesEnv: Bool { hasEnv }
+
     /// Returns log-probs (nTypes x nClasses). Pool 4 env draws upstream and
     /// average these when env is active (matches the Python inference default).
     public func logProbs(_ d: Descriptors) throws -> [[Float]] {

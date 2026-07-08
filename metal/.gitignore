@@ -1,0 +1,7 @@
+# SwiftPM build products
+.build/
+*.xcodeproj
+.swiftpm/
+
+# on-device model artifacts — rebuilt from the Release tarball, not tracked
+exports/
